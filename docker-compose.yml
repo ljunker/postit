@@ -1,0 +1,15 @@
+# Runs postitd behind an existing reverse proxy, which terminates TLS for
+# postit.kryptikk.de and forwards to 127.0.0.1:8080. See DEPLOY.md.
+services:
+  postitd:
+    build: .
+    image: postitd:latest
+    restart: unless-stopped
+    env_file: .env # POSTIT_TOKEN=…
+    volumes:
+      - postit-data:/data
+    ports:
+      - "127.0.0.1:8080:8080"
+
+volumes:
+  postit-data:

@@ -1,0 +1,33 @@
+# Binaries (go build ./cmd/p, ./cmd/postitd)
+/p
+/postitd
+/bin/
+/dist/
+*.exe
+*.test
+
+# Secrets – .env.example stays in the repo
+.env
+.env.*
+!.env.example
+sync.json
+
+# Local databases and SQLite side files (WAL, journal, backups)
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+
+# Go tooling
+*.out
+coverage.*
+/vendor/
+go.work
+go.work.sum
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
