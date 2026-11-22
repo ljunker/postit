@@ -2,8 +2,7 @@
 # postit.kryptikk.de and forwards to 127.0.0.1:8080. See DEPLOY.md.
 services:
   postitd:
-    build: .
-    image: postitd:latest
+    image: kryptikker/postitd:latest
     restart: unless-stopped
     env_file: .env # POSTIT_TOKEN=…
     volumes:
