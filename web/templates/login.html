@@ -1,0 +1,13 @@
+{{define "login"}}{{template "head" "Anmelden · Post-its"}}
+<body class="login-page">
+<form class="login" method="post" action="/login">
+  <h1>Post-its</h1>
+  {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+  <label>Passwort
+    <input type="password" name="password" autocomplete="current-password" required autofocus>
+  </label>
+  <button>Anmelden</button>
+</form>
+</body>
+</html>
+{{end}}

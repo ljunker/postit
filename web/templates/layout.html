@@ -1,0 +1,103 @@
+{{define "head"}}<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>{{.}}</title>
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/app.js" defer></script>
+</head>
+{{end}}
+
+{{define "page"}}{{template "head" (printf "%s · Post-its" .Current.Name)}}
+<body>
+<div id="app">{{template "app" .}}</div>
+<dialog id="editor" aria-label="Post-it bearbeiten"></dialog>
+</body>
+</html>
+{{end}}
+
+{{define "app"}}
+<input type="checkbox" id="nav-toggle" class="nav-toggle" hidden>
+<header class="topbar">
+  <label for="nav-toggle" class="nav-button" aria-label="Projekte">☰</label>
+  <h1>{{.Current.Name}}</h1>
+  <span class="sync {{if .Sync.Offline}}offline{{else if .Sync.OK}}ok{{end}}" title="{{.Sync.Text}}">{{if .Sync.Offline}}○{{else}}✓{{end}}</span>
+</header>
+<div class="layout">
+  <nav class="sidebar">
+    <div class="brand">Post-its</div>
+    <ul class="projects">
+      {{range .Projects}}
+      <li><a href="/p/{{.ID}}"{{if eq .ID $.Current.ID}} aria-current="page"{{end}}>
+        <span class="pname">{{if .IsInbox}}📥 {{end}}{{.Name}}</span><span class="count">{{.NoteCount}}</span></a></li>
+      {{end}}
+    </ul>
+    <details class="newproject">
+      <summary>+ Neues Projekt</summary>
+      <form method="post" action="/p">
+        <input name="name" placeholder="Name" required maxlength="200" aria-label="Projektname">
+        <button>Anlegen</button>
+      </form>
+    </details>
+    <div class="sidebar-foot">
+      <span class="sync-text {{if .Sync.Offline}}offline{{end}}">{{.Sync.Text}}</span>
+      <form method="post" action="/logout"><button class="link">Abmelden</button></form>
+    </div>
+  </nav>
+  <label for="nav-toggle" class="scrim" aria-hidden="true"></label>
+
+  <main class="board">
+    <div class="board-head">
+      <h2>{{.Current.Name}}</h2>
+      {{if not .Current.IsInbox}}
+      <details class="project-actions">
+        <summary aria-label="Projekt-Aktionen">⋯</summary>
+        <div class="menu">
+          <form method="post" action="/p/{{.Current.ID}}/rename">
+            <input name="name" value="{{.Current.Name}}" required maxlength="200" aria-label="Neuer Name">
+            <button>Umbenennen</button>
+          </form>
+          <form method="post" action="/p/{{.Current.ID}}/delete"
+                data-confirm="Projekt „{{.Current.Name}}“ mit allen Post-its löschen?">
+            <button class="danger">Projekt löschen</button>
+          </form>
+        </div>
+      </details>
+      {{end}}
+    </div>
+
+    <form class="quickadd" method="post" action="/p/{{.Current.ID}}/notes">
+      <textarea name="body" rows="2" placeholder="Neues Post-it … (erste Zeile = Titel, ⌘/Strg+Enter speichert)" aria-label="Neues Post-it"></textarea>
+      <button>Hinzufügen</button>
+    </form>
+
+    {{if .Notes}}
+    <div class="notes">
+      {{range .Notes}}
+      <article class="note{{if .Pinned}} pinned{{end}}" style="--bg:{{.Color.BG}};--fg:{{.Color.FG}}">
+        <a class="note-open" href="/n/{{.ID}}">
+          {{if .Priority}}<span class="prio" title="Priorität {{.Priority}}">{{repeat "!" .Priority}}</span>{{end}}
+          <h3>{{if .Title}}{{.Title}}{{else}}<em>(leer)</em>{{end}}</h3>
+          {{if .Rest}}<p>{{.Rest}}</p>{{end}}
+        </a>
+        <footer>
+          <time>{{.Updated}}</time>
+          <form method="post" action="/n/{{.ID}}/pin">
+            <button class="icon{{if .Pinned}} on{{end}}" title="{{if .Pinned}}Lösen{{else}}Anheften{{end}}" aria-label="{{if .Pinned}}Lösen{{else}}Anheften{{end}}">📌</button>
+          </form>
+          <form method="post" action="/n/{{.ID}}/delete" data-confirm="Post-it „{{if .Title}}{{.Title}}{{else}}(leer){{end}}“ löschen?">
+            <button class="icon" title="Löschen" aria-label="Löschen">🗑</button>
+          </form>
+        </footer>
+      </article>
+      {{end}}
+    </div>
+    {{else}}
+    <p class="empty">Noch keine Post-its in diesem Projekt.</p>
+    {{end}}
+  </main>
+</div>
+{{end}}

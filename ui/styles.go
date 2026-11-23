@@ -1,6 +1,10 @@
 package ui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"github.com/charmbracelet/lipgloss"
+
+	"postit/palette"
+)
 
 // NoteColor is one entry of the post-it palette.
 type NoteColor struct {
@@ -11,16 +15,13 @@ type NoteColor struct {
 }
 
 // Palette is the list of colors a post-it can have; c / C cycle through it.
-var Palette = []NoteColor{
-	{"yellow", "gelb", "#FFE873", "#2B2400"},
-	{"orange", "orange", "#FFBE76", "#2E1A00"},
-	{"pink", "pink", "#FFA8CF", "#33001A"},
-	{"red", "rot", "#FF8A80", "#330400"},
-	{"purple", "lila", "#CDB0FF", "#1D0838"},
-	{"blue", "blau", "#94CCFF", "#001E3A"},
-	{"green", "grün", "#AEE8A6", "#062B00"},
-	{"gray", "grau", "#D4D4D4", "#1E1E1E"},
-}
+var Palette = func() []NoteColor {
+	out := make([]NoteColor, len(palette.Colors))
+	for i, c := range palette.Colors {
+		out[i] = NoteColor{c.Name, c.Label, lipgloss.Color(c.BG), lipgloss.Color(c.FG)}
+	}
+	return out
+}()
 
 func colorIndex(name string) int {
 	for i, c := range Palette {

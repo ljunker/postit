@@ -1,0 +1,38 @@
+{{define "editorPage"}}{{template "head" "Post-it bearbeiten"}}
+<body class="editor-page">
+{{template "editor" .}}
+</body>
+</html>
+{{end}}
+
+{{define "editor"}}
+<form class="editor" method="post" action="/n/{{.Note.ID}}" style="--bg:{{.Color.BG}};--fg:{{.Color.FG}}">
+  <textarea name="body" rows="12" autofocus aria-label="Text">{{.Note.Body}}</textarea>
+  <fieldset class="colors">
+    <legend>Farbe</legend>
+    {{range .Palette}}
+    <label class="swatch" style="--bg:{{.BG}}" title="{{.Label}}">
+      <input type="radio" name="color" value="{{.Name}}" data-bg="{{.BG}}" data-fg="{{.FG}}"{{if eq .Name $.Note.Color}} checked{{end}}>
+      <span class="visually-hidden">{{.Label}}</span>
+    </label>
+    {{end}}
+  </fieldset>
+  <div class="row">
+    <label>Priorität
+      <select name="priority">
+        {{range seq 3}}<option value="{{.}}"{{if eq . $.Note.Priority}} selected{{end}}>{{if .}}{{repeat "!" .}}{{else}}keine{{end}}</option>{{end}}
+      </select>
+    </label>
+    <label>Projekt
+      <select name="project">
+        {{range .Projects}}<option value="{{.ID}}"{{if eq .ID $.Note.ProjectID}} selected{{end}}>{{.Name}}</option>{{end}}
+      </select>
+    </label>
+    <label class="check"><input type="checkbox" name="pinned" value="1"{{if .Note.Pinned}} checked{{end}}> angeheftet</label>
+  </div>
+  <div class="actions">
+    <a class="button secondary" href="{{.Back}}" data-close>Abbrechen</a>
+    <button>Speichern</button>
+  </div>
+</form>
+{{end}}
