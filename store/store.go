@@ -241,14 +241,16 @@ func (s *Store) InboxID() (int64, error) {
 	return res.LastInsertId()
 }
 
-// ListProjects returns the inbox first, then projects in creation order.
+// ListProjects returns the inbox first, then projects in their order (see
+// MoveProject; new projects go to the end). Ties, e.g. after two devices
+// reordered at once, break by creation time so every device agrees.
 func (s *Store) ListProjects() ([]Project, error) {
 	rows, err := s.db.Query(`
 		SELECT p.id, p.name, p.is_inbox, COUNT(n.id)
 		FROM projects p LEFT JOIN notes n ON n.project_id = p.id AND n.deleted = 0
 		WHERE p.deleted = 0
 		GROUP BY p.id
-		ORDER BY p.is_inbox DESC, p.position, p.id`)
+		ORDER BY p.is_inbox DESC, p.position, p.created_at, p.id`)
 	if err != nil {
 		return nil, err
 	}
@@ -285,6 +287,71 @@ func (s *Store) RenameProject(id int64, name string) error {
 	}
 	_, err := s.exec(`UPDATE projects SET name = ?, `+touch+` WHERE id = ? AND is_inbox = 0`, name, now(), id)
 	return err
+}
+
+// ErrNotMovable is returned by MoveProject for the inbox or an unknown project.
+var ErrNotMovable = errors.New("project cannot be moved")
+
+// MoveProject puts a project at index among the projects below the inbox
+// (0 = right below it); index is clamped to the list. The inbox stays first.
+// Positions are renumbered 1..n and only rows whose position changes are
+// marked for sync.
+func (s *Store) MoveProject(id int64, index int) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	type row struct{ id, pos int64 }
+	rows, err := tx.Query(`SELECT id, position FROM projects WHERE deleted = 0 AND is_inbox = 0
+		ORDER BY position, created_at, id`)
+	if err != nil {
+		return err
+	}
+	var list []row
+	from := -1
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.id, &r.pos); err != nil {
+			rows.Close()
+			return err
+		}
+		if r.id == id {
+			from = len(list)
+		}
+		list = append(list, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if from < 0 {
+		return ErrNotMovable
+	}
+	index = max(0, min(index, len(list)-1))
+	r := list[from]
+	list = append(list[:from], list[from+1:]...)
+	list = append(list[:index], append([]row{r}, list[index:]...)...)
+
+	t := now()
+	changed := false
+	for i, r := range list {
+		if r.pos == int64(i+1) {
+			continue
+		}
+		if _, err := tx.Exec(`UPDATE projects SET position = ?, `+touch+` WHERE id = ?`, i+1, t, r.id); err != nil {
+			return err
+		}
+		changed = true
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if changed {
+		s.changes.Add(1)
+	}
+	return nil
 }
 
 // DeleteProject deletes a project and all its notes. The inbox cannot be deleted.

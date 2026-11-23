@@ -80,6 +80,7 @@ func (a *App) Handler() http.Handler {
 	app.HandleFunc("POST /p", a.createProject)
 	app.HandleFunc("POST /p/{id}/rename", a.renameProject)
 	app.HandleFunc("POST /p/{id}/delete", a.deleteProject)
+	app.HandleFunc("POST /p/{id}/move", a.moveProject)
 	app.HandleFunc("POST /p/{id}/notes", a.createNote)
 	app.HandleFunc("GET /n/{id}", a.notePage)
 	app.HandleFunc("POST /n/{id}", a.saveNote)
@@ -181,6 +182,8 @@ type pageData struct {
 	Current  store.Project
 	Notes    []noteView
 	Sync     syncView
+	CanUp    bool // the current project can move up / down
+	CanDown  bool
 }
 
 func (a *App) projectPage(w http.ResponseWriter, r *http.Request) {
@@ -194,6 +197,9 @@ func (a *App) projectPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := pageData{Projects: projects, Current: cur, Sync: a.syncView()}
+	if i, n := movableIndex(projects, cur.ID); i >= 0 {
+		data.CanUp, data.CanDown = i > 0, i < n-1
+	}
 	for _, n := range notes {
 		data.Notes = append(data.Notes, newNoteView(n))
 	}
@@ -293,6 +299,54 @@ func (a *App) deleteProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.changed(w, r, "/")
+}
+
+// moveProject reorders a project: dir=up|down moves it one step, to=N puts
+// it at index N among the projects below the inbox (drag and drop).
+func (a *App) moveProject(w http.ResponseWriter, r *http.Request) {
+	projects, p, ok := a.project(w, r)
+	if !ok {
+		return
+	}
+	if p.IsInbox {
+		http.Error(w, "Die Inbox bleibt oben.", http.StatusBadRequest)
+		return
+	}
+	cur, _ := movableIndex(projects, p.ID)
+	var to int
+	switch dir := r.PostFormValue("dir"); {
+	case dir == "up":
+		to = cur - 1
+	case dir == "down":
+		to = cur + 1
+	default:
+		n, err := strconv.Atoi(r.PostFormValue("to"))
+		if err != nil {
+			http.Error(w, "dir=up|down oder to=<Index> fehlt", http.StatusBadRequest)
+			return
+		}
+		to = n
+	}
+	if a.fail(w, a.st.MoveProject(p.ID, to)) {
+		return
+	}
+	a.changed(w, r, projectURL(p.ID))
+}
+
+// movableIndex returns the index of project id among the projects below the
+// inbox (-1 if it is the inbox or missing) and how many of those there are.
+func movableIndex(projects []store.Project, id int64) (index, n int) {
+	index = -1
+	for _, p := range projects {
+		if p.IsInbox {
+			continue
+		}
+		if p.ID == id {
+			index = n
+		}
+		n++
+	}
+	return index, n
 }
 
 // ---- notes -----------------------------------------------------------------

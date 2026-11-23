@@ -90,7 +90,53 @@
   const app = document.getElementById("app");
   if (!app) return;
 
+  // ---- drag projects in the sidebar to reorder them ---------------------------
+  let dragged = null;
+  let draggedFrom = -1;
+  const movable = (li) => [...li.parentNode.querySelectorAll("li[data-move]")];
+
+  app.addEventListener("dragstart", (e) => {
+    const li = e.target.closest && e.target.closest(".projects li[data-move]");
+    if (!li) return;
+    dragged = li;
+    draggedFrom = movable(li).indexOf(li);
+    li.classList.add("dragging");
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", li.querySelector(".pname").textContent);
+  });
+
+  app.addEventListener("dragover", (e) => {
+    if (!dragged) return;
+    const li = e.target.closest(".projects li[data-move]");
+    if (!li) return;
+    e.preventDefault();
+    if (li === dragged) return;
+    const r = li.getBoundingClientRect();
+    li.parentNode.insertBefore(dragged, e.clientY > r.top + r.height / 2 ? li.nextSibling : li);
+  });
+
+  app.addEventListener("drop", (e) => { if (dragged) e.preventDefault(); });
+
+  app.addEventListener("dragend", async () => {
+    if (!dragged) return;
+    const li = dragged;
+    dragged = null;
+    li.classList.remove("dragging");
+    const to = movable(li).indexOf(li);
+    if (to === draggedFrom) return;
+    try {
+      const res = await fetch(li.dataset.move, {
+        method: "POST", credentials: "same-origin", body: new URLSearchParams({ to: String(to) }),
+      });
+      if (!res.ok) throw new Error(res.status);
+    } catch {
+      /* the refresh below shows the order the server has */
+    }
+    refresh(); // the sidebar already shows the new order; this syncs the rest
+  });
+
   const busy = () =>
+    dragged ||
     (dialog && dialog.open) ||
     app.querySelector("details[open]") ||
     [...app.querySelectorAll("textarea, input:not([type=checkbox])")].some(

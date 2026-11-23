@@ -82,6 +82,12 @@ input:not([type=checkbox]):not([type=radio]), select, textarea {
   padding: .75rem; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow);
 }
 .project-actions .menu form { display: flex; gap: .4rem; }
+.project-actions .order { display: flex; gap: .4rem; }
+.project-actions .order form { flex: 1; }
+.project-actions .order button { flex: 1; background: transparent; color: inherit; border: 1px solid var(--line); }
+.project-actions .order button:disabled { opacity: .4; cursor: default; }
+.projects li[draggable=true] { cursor: grab; }
+.projects li.dragging { opacity: .4; }
 
 .quickadd { display: flex; gap: .5rem; align-items: flex-start; margin-bottom: 1.25rem; max-width: 720px; }
 .quickadd textarea { resize: vertical; min-height: 2.6rem; }
