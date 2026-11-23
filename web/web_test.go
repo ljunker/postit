@@ -299,6 +299,42 @@ func TestInboxProtected(t *testing.T) {
 	}
 }
 
+func TestMarkdown(t *testing.T) {
+	e := newEnv(t)
+	b := e.login(t)
+	inbox := "/p/" + itoa(inboxID(t, e.st))
+	b.post(t, inbox+"/notes", url.Values{"body": {"# Hallo **Welt**\n**fett** und [Link](https://example.org)\n- [x] erledigt\n<script>alert(1)</script>"}})
+
+	_, page := b.get(t, inbox)
+	for _, want := range []string{
+		`<a class="note-open" href="/n/`, ">Hallo Welt</a></h3>",
+		"<strong>fett</strong>",
+		`<a href="https://example.org" target="_blank" rel="noopener noreferrer">Link</a>`,
+		`type="checkbox"`,
+		"&lt;script&gt;alert(1)&lt;/script&gt;",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("project page lacks %q", want)
+		}
+	}
+	if strings.Contains(page, "<script>alert") || strings.Contains(page, "# Hallo") {
+		t.Error("raw Markdown or HTML leaked into the page")
+	}
+
+	resp := b.post(t, "/preview", url.Values{"body": {"## Titel\n*kursiv*"}})
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "<h3>Titel</h3>") || !strings.Contains(string(body), "<em>kursiv</em>") {
+		t.Fatalf("preview: %d %s", resp.StatusCode, body)
+	}
+
+	anon := newBrowser(t, e.web.URL, e.web.URL)
+	resp = anon.post(t, "/preview", url.Values{"body": {"*x*"}})
+	body, _ = io.ReadAll(resp.Body)
+	if strings.Contains(string(body), "<em>x</em>") {
+		t.Fatal("preview works without login")
+	}
+}
+
 func TestHealthzAndStatic(t *testing.T) {
 	e := newEnv(t)
 	for _, p := range []string{"/healthz", "/static/app.css", "/static/app.js", "/static/icon.svg"} {

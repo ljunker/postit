@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"postit/md"
 	"postit/store"
 )
 
@@ -23,6 +24,7 @@ const (
 	modeInput                // typing a project name
 	modeConfirm              // waiting for y/n
 	modeMove                 // choosing a project to move a post-it to
+	modeView                 // reading one post-it with its Markdown rendered
 )
 
 const projectPaneW = 28 // outer width of the project pane
@@ -45,7 +47,9 @@ type Model struct {
 	noteSel  int
 	boardOff int
 
-	editor editor
+	editor   editor
+	editFrom mode // where the editor returns to: board or view
+	viewer   viewer
 
 	input       textinput.Model
 	inputLabel  string
@@ -165,8 +169,11 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		if m.mode == modeEdit {
+		switch m.mode {
+		case modeEdit:
 			m.editor.resize(m.width, m.mainHeight())
+		case modeView:
+			m.viewer.resize(m.width, m.mainHeight())
 		}
 		return m, nil
 	case tea.KeyMsg:
@@ -192,6 +199,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateConfirm(msg)
 		case modeMove:
 			return m.updateMove(msg)
+		case modeView:
+			return m.updateViewer(msg)
 		}
 	}
 	if m.mode == modeEdit {
@@ -302,7 +311,11 @@ func (m Model) updateBoard(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if ok {
 			return m.openEditor(store.Note{ProjectID: p.ID, Color: Palette[0].Name})
 		}
-	case "enter", "e":
+	case "enter", "v":
+		if hasNote {
+			return m.openViewer(n)
+		}
+	case "e":
 		if hasNote {
 			return m.openEditor(n)
 		}
@@ -343,7 +356,7 @@ func (m Model) updateBoard(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "d", "x":
 		if hasNote {
-			title := n.Title()
+			title := md.Title(n.Body)
 			if title == "" {
 				title = "(leer)"
 			}
@@ -362,35 +375,74 @@ func (m Model) updateBoard(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) openEditor(n store.Note) (tea.Model, tea.Cmd) {
 	m.editor = newEditor(n)
 	m.editor.resize(m.width, m.mainHeight())
+	m.editFrom = m.mode
 	m.mode = modeEdit
 	return m, nil
 }
 
-// saveEditor stores the editor's note. A new note with no text is dropped.
-func (m *Model) saveEditor() {
+// saveEditor stores the editor's note and returns it. A new note with no
+// text is dropped (ok = false).
+func (m *Model) saveEditor() (store.Note, bool) {
 	n := m.editor.note
 	n.Body = strings.TrimRight(m.editor.ta.Value(), " \n")
 	if n.ID == 0 {
 		if strings.TrimSpace(n.Body) == "" {
-			return
+			return n, false
 		}
 		id, err := m.st.CreateNote(n.ProjectID, n.Body, n.Color)
 		if m.fail(err) {
-			return
+			return n, false
 		}
 		n.ID = id
 	}
 	m.fail(m.st.SaveNote(n))
 	m.refresh(n.ID)
+	return n, true
+}
+
+// closeEditor saves and goes back to where the editor was opened from.
+func (m Model) closeEditor() (tea.Model, tea.Cmd) {
+	n, ok := m.saveEditor()
+	if ok && m.editFrom == modeView {
+		return m.openViewer(n)
+	}
+	m.mode = modeBoard
+	return m, nil
+}
+
+// ---- viewer -------------------------------------------------------------
+
+func (m Model) openViewer(n store.Note) (tea.Model, tea.Cmd) {
+	m.viewer = newViewer(n)
+	m.viewer.resize(m.width, m.mainHeight())
+	m.mode = modeView
+	return m, nil
+}
+
+func (m Model) updateViewer(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch k.String() {
+	case "esc", "q", "h", "left":
+		m.mode = modeBoard
+		return m, nil
+	case "e", "enter":
+		return m.openEditor(m.viewer.note)
+	case "g", "home":
+		m.viewer.vp.GotoTop()
+		return m, nil
+	case "G", "end":
+		m.viewer.vp.GotoBottom()
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.viewer.vp, cmd = m.viewer.vp.Update(k)
+	return m, cmd
 }
 
 func (m Model) updateEditor(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	e := &m.editor
 	switch k.String() {
 	case "esc", "ctrl+s":
-		m.saveEditor()
-		m.mode = modeBoard
-		return m, nil
+		return m.closeEditor()
 	case "ctrl+p":
 		e.note.Pinned = !e.note.Pinned
 		return m, nil
@@ -510,9 +562,12 @@ func (m Model) View() string {
 	}
 	h := m.mainHeight()
 	var main string
-	if m.mode == modeEdit {
+	switch m.mode {
+	case modeEdit:
 		main = m.editor.view(m.width, h)
-	} else {
+	case modeView:
+		main = m.viewer.view(m.width, h)
+	default:
 		main = lipgloss.JoinHorizontal(lipgloss.Top, m.viewProjects(h), m.viewBoard(h))
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, main, m.viewFooter())
@@ -571,7 +626,7 @@ func (m *Model) viewBoard(h int) string {
 
 func (m Model) viewMove(w, h int) string {
 	n, _ := m.currentNote()
-	lines := []string{headerStyle.Render("Verschieben nach …"), mutedStyle.Render(ansi.Truncate(n.Title(), 30, "…")), ""}
+	lines := []string{headerStyle.Render("Verschieben nach …"), mutedStyle.Render(ansi.Truncate(md.Title(n.Body), 30, "…")), ""}
 	for i, t := range m.moveTargets() {
 		if i == m.moveSel {
 			lines = append(lines, selectedStyle.Render("› "+t.Name+" "))
@@ -587,7 +642,7 @@ var fullHelp = [][2]string{
 	{"tab", "Fokus Projekte ⇄ Board"},
 	{"hjkl / ←↓↑→", "bewegen"},
 	{"n", "neues Projekt / Post-it"},
-	{"enter", "Post-it öffnen und bearbeiten"},
+	{"enter / e", "Post-it ansehen / bearbeiten"},
 	{"c / C", "Farbe vor / zurück"},
 	{"p", "anpinnen"},
 	{"+ - 0-3", "Priorität"},
@@ -624,6 +679,8 @@ func (m Model) viewFooter() string {
 		s = helpLine("esc", "speichern & zurück", "ctrl+n/b", "Farbe", "ctrl+p", "pin", "alt+↑/↓", "Prio")
 	case modeMove:
 		s = helpLine("j/k", "wählen", "enter", "verschieben", "esc", "abbrechen")
+	case modeView:
+		s = helpLine("j/k", "scrollen", "e", "bearbeiten", "esc", "zurück")
 	case modeProjects:
 		if m.showHelp {
 			return m.viewFullHelp()
@@ -633,7 +690,7 @@ func (m Model) viewFooter() string {
 		if m.showHelp {
 			return m.viewFullHelp()
 		}
-		s = helpLine("n", "neu", "enter", "bearbeiten", "c", "farbe", "p", "pin", "+/-", "prio", "m", "verschieben", "d", "löschen", "?", "hilfe")
+		s = helpLine("n", "neu", "enter", "ansehen", "e", "bearbeiten", "c", "farbe", "p", "pin", "+/-", "prio", "m", "verschieben", "d", "löschen", "?", "hilfe")
 	}
 	status := m.syncStatus()
 	if status == "" {

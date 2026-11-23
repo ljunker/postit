@@ -55,6 +55,37 @@
     form.style.setProperty("--fg", r.dataset.fg);
   });
 
+  // ---- editor: Bearbeiten | Vorschau -----------------------------------------
+  const showTabs = (root) => root.querySelectorAll(".editor .tabs").forEach((t) => { t.hidden = false; });
+  showTabs(document);
+  if (dialog) new MutationObserver(() => showTabs(dialog)).observe(dialog, { childList: true });
+
+  document.addEventListener("click", async (e) => {
+    const tab = e.target.closest(".editor [data-tab]");
+    if (!tab) return;
+    const form = tab.closest(".editor");
+    const ta = form.querySelector("textarea");
+    const pv = form.querySelector(".preview");
+    const preview = tab.dataset.tab === "preview";
+    form.querySelectorAll("[data-tab]").forEach((b) => b.setAttribute("aria-selected", String(b === tab)));
+    if (preview) {
+      pv.style.minHeight = ta.offsetHeight + "px";
+      try {
+        const res = await fetch("/preview", {
+          method: "POST", credentials: "same-origin", body: new URLSearchParams({ body: ta.value }),
+        });
+        if (!res.ok || res.redirected) throw new Error(res.status);
+        pv.innerHTML = await res.text();
+      } catch {
+        pv.textContent = "Vorschau gerade nicht verfügbar.";
+      }
+      if (tab.getAttribute("aria-selected") !== "true") return; // switched back meanwhile
+    }
+    ta.hidden = preview;
+    pv.hidden = !preview;
+    if (!preview) ta.focus();
+  });
+
   // ---- auto refresh ----------------------------------------------------------
   const app = document.getElementById("app");
   if (!app) return;
