@@ -125,6 +125,36 @@ func TestTerminalBackgroundHasNoHoles(t *testing.T) {
 	}
 }
 
+// Bold text gets a color of its own, for terminals that drop the bold
+// attribute (herdr).
+func TestTerminalBoldHasOwnColor(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(termenv.Ascii)
+	base := lipgloss.NewStyle().Background(lipgloss.Color("#FFE873")).Foreground(lipgloss.Color("#2B2400"))
+	out := Terminal("normal **fett**", 20, base)
+	if !strings.Contains(out, "\x1b[1;38;2;104;88;8;48;2;255;232;115mfett") {
+		t.Errorf("bold text lacks bold and its own color: %q", out)
+	}
+	if !strings.Contains(out, "38;2;43;36;0;48;2;255;232;115mnormal") {
+		t.Errorf("normal text lost its color: %q", out)
+	}
+}
+
+func TestStrong(t *testing.T) {
+	for bg, want := range map[string]string{
+		"#FFE873": "#685808", // yellow: dark yellow
+		"#D4D4D4": "#083868", // gray: dark blue
+		"#1E1E1E": "#97c7f7", // dark background: light tone
+	} {
+		if got := strong(lipgloss.Color(bg), lipgloss.Color("#000000")); got != lipgloss.Color(want) {
+			t.Errorf("strong(%s) = %v, want %s", bg, got, want)
+		}
+	}
+	if got := strong(lipgloss.NoColor{}, lipgloss.Color("#123456")); got != lipgloss.Color("#123456") {
+		t.Errorf("strong without background = %v, want the text color", got)
+	}
+}
+
 func TestTerminalNarrow(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.Ascii)
 	out := Terminal("ein_wort_das_viel_zu_lang_ist", 8, lipgloss.NewStyle())
