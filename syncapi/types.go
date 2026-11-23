@@ -13,6 +13,11 @@ const Path = "/api/v1/sync"
 // PingPath answers 204 when the token is valid.
 const PingPath = "/api/v1/ping"
 
+// InboxPath takes a plain-text body and files it as a new post-it in the
+// inbox (for clients that cannot speak the sync protocol, e.g. iOS Shortcuts).
+// It answers 201 with the new note as JSON.
+const InboxPath = "/api/v1/inbox"
+
 // InboxUID is the fixed uid of the inbox project on every device.
 const InboxUID = "inbox"
 

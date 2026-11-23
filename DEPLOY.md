@@ -69,6 +69,25 @@ Die Verbindung landet in `~/.config/postit/sync.json` (nur für dich lesbar). Da
 
 Im Browser: `https://postit.kryptikk.de` öffnen und mit `POSTIT_WEB_PASSWORD` anmelden. Die Sitzung hält 30 Tage.
 
+## iPhone-Kurzbefehl: Text in die Inbox
+
+`POST /api/v1/inbox` nimmt reinen Text als Body und legt ihn als gelbes Post-it in der Inbox ab (Antwort `201`). Gesichert ist der Endpunkt mit demselben Token wie der Sync.
+
+```sh
+curl -i -H "Authorization: Bearer $POSTIT_TOKEN" --data-binary 'Milch kaufen' https://postit.kryptikk.de/api/v1/inbox
+```
+
+In der App **Kurzbefehle** einen neuen Kurzbefehl anlegen, z. B. „Post-it“:
+
+1. **Nach Eingabe fragen**: Eingabetyp *Text*, Frage „Post-it?“
+2. **Inhalte von URL abrufen**: URL `https://postit.kryptikk.de/api/v1/inbox`. Unter *Mehr anzeigen*:
+   - Methode: `POST`
+   - Header: `Authorization` = `Bearer <Token aus .env>`
+   - Request-Body: *Datei*, als Datei die Variable *Angegebene Eingabe*
+3. Optional **Benachrichtigung anzeigen**: „In der Inbox ✓“
+
+Danach kannst du den Kurzbefehl mit „Hey Siri, Post-it“ starten, ihn auf den Home-Bildschirm legen oder auf die Action-Taste. Soll er auch im Teilen-Menü erscheinen, schalte *Im Share-Sheet anzeigen* ein und nimm im Schritt 1 *Kurzbefehl-Eingabe* statt der Abfrage. Die Notiz liegt sofort auf dem Server, `p` und die Webapp zeigen sie beim nächsten Abgleich.
+
 ## Images bauen
 
 Beide Images entstehen aus demselben `Dockerfile`:

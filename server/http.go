@@ -5,13 +5,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"postit/syncapi"
 )
+
+// maxNote limits the body of a post-it filed via the inbox endpoint.
+const maxNote = 64 << 10
 
 // maxBody limits a sync request (all notes of a fresh device fit easily).
 const maxBody = 16 << 20
@@ -53,6 +60,38 @@ func Handler(db *DB, token string, log *slog.Logger) http.Handler {
 			"pulled", len(resp.Projects)+len(resp.Notes), "cursor", resp.Cursor)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
+	})
+	api.HandleFunc("POST "+syncapi.InboxPath, func(w http.ResponseWriter, r *http.Request) {
+		raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxNote))
+		if err != nil {
+			writeError(w, http.StatusRequestEntityTooLarge, "note too long")
+			return
+		}
+		body := strings.TrimSpace(strings.ReplaceAll(string(raw), "\r\n", "\n"))
+		if body == "" {
+			writeError(w, http.StatusBadRequest, "empty note")
+			return
+		}
+		t := time.Now().UnixNano()
+		note := syncapi.Note{
+			UID:        uuid.NewString(),
+			ProjectUID: syncapi.InboxUID,
+			Body:       body,
+			Color:      "yellow",
+			CreatedAt:  t,
+			UpdatedAt:  t,
+			ModifiedAt: t,
+		}
+		// Since = MaxInt64: push only, pull nothing back.
+		if _, err := db.Sync(syncapi.Request{Since: math.MaxInt64, Notes: []syncapi.Note{note}}); err != nil {
+			log.Error("inbox", "err", err)
+			writeError(w, http.StatusInternalServerError, "saving failed")
+			return
+		}
+		log.Info("inbox", "uid", note.UID, "len", len(body))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(note)
 	})
 	mux.Handle("/api/", requireToken(token, api))
 

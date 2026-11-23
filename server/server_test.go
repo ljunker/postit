@@ -96,6 +96,41 @@ func noteID(t *testing.T, st *store.Store, project, body string) int64 {
 	return 0
 }
 
+func TestInboxEndpoint(t *testing.T) {
+	srv := newServer(t)
+	post := func(auth, body string) int {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/inbox", strings.NewReader(body))
+		req.Header.Set("Content-Type", "text/plain")
+		if auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if got := post("", "hallo"); got != http.StatusUnauthorized {
+		t.Fatalf("without token: %d", got)
+	}
+	if got := post("Bearer "+token, "  \n "); got != http.StatusBadRequest {
+		t.Fatalf("empty note: %d", got)
+	}
+	if got := post("Bearer "+token, "  Milch \"kaufen\"\r\nund Brot \n"); got != http.StatusCreated {
+		t.Fatalf("valid note: %d", got)
+	}
+
+	d := newDevice(t, srv.URL)
+	d.sync(t)
+	got := d.bodies(t)[store.InboxName]
+	if len(got) != 1 || got[0] != "Milch \"kaufen\"\nund Brot/yellow" {
+		t.Fatalf("inbox = %q", got)
+	}
+}
+
 func TestAuth(t *testing.T) {
 	srv := newServer(t)
 	for _, tc := range []struct {
