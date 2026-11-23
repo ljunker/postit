@@ -349,6 +349,67 @@ func TestHealthzAndStatic(t *testing.T) {
 	}
 }
 
+func projectOrder(t *testing.T, st *store.Store) string {
+	t.Helper()
+	ps, err := st.ListProjects()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, p := range ps {
+		out = append(out, p.Name)
+	}
+	return strings.Join(out, ",")
+}
+
+func TestMoveProject(t *testing.T) {
+	e := newEnv(t)
+	b := e.login(t)
+	for _, name := range []string{"A", "B", "C"} {
+		b.post(t, "/p", url.Values{"name": {name}})
+	}
+	c := "/p/" + itoa(projIDByName(t, e.st, "C"))
+
+	_, page := b.get(t, c)
+	if !strings.Contains(page, `value="up"`) || !strings.Contains(page, "↓ Nach unten</button>") ||
+		strings.Contains(page, "<button>↓ Nach unten") {
+		t.Fatal("last project: want up enabled, down disabled")
+	}
+	if resp := b.post(t, c+"/move", url.Values{"dir": {"up"}}); resp.StatusCode != http.StatusOK || resp.Request.URL.Path != c {
+		t.Fatalf("move up: %d at %s", resp.StatusCode, resp.Request.URL.Path)
+	}
+	if got := projectOrder(t, e.st); got != "Inbox,A,C,B" {
+		t.Fatalf("after up: %s", got)
+	}
+	b.post(t, c+"/move", url.Values{"to": {"0"}}) // drag and drop
+	if got := projectOrder(t, e.st); got != "Inbox,C,A,B" {
+		t.Fatalf("after to=0: %s", got)
+	}
+
+	inbox := "/p/" + itoa(inboxID(t, e.st))
+	if resp := b.post(t, inbox+"/move", url.Values{"dir": {"down"}}); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("move inbox: %d", resp.StatusCode)
+	}
+	if resp := b.post(t, c+"/move", nil); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("move without dir: %d", resp.StatusCode)
+	}
+
+	// A device running p gets the same order.
+	e.sync(t)
+	dev, err := store.Open(filepath.Join(t.TempDir(), "p.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dev.Close()
+	client := syncclient.New(syncclient.Config{Server: e.postitd.URL, Token: token})
+	if _, err := client.Sync(context.Background(), dev); err != nil {
+		t.Fatal(err)
+	}
+	if got := projectOrder(t, dev); got != "Inbox,C,A,B" {
+		t.Fatalf("order on device: %s", got)
+	}
+}
+
 func projIDByName(t *testing.T, st *store.Store, name string) int64 {
 	t.Helper()
 	ps, _ := st.ListProjects()

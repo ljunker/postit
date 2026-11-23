@@ -1,7 +1,9 @@
 package store
 
 import (
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -68,6 +70,80 @@ func TestNoteOrderMoveAndCascade(t *testing.T) {
 	}
 	if _, err := s.GetNote(low); err != nil {
 		t.Fatal("moved note was deleted")
+	}
+}
+
+func names(t *testing.T, s *Store) string {
+	t.Helper()
+	ps, err := s.ListProjects()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, p := range ps {
+		out = append(out, p.Name)
+	}
+	return strings.Join(out, ",")
+}
+
+func TestMoveProject(t *testing.T) {
+	s := open(t)
+	a, _ := s.CreateProject("A")
+	s.CreateProject("B")
+	c, _ := s.CreateProject("C")
+	if got := names(t, s); got != "Inbox,A,B,C" {
+		t.Fatalf("initial order: %s", got)
+	}
+
+	steps := []struct {
+		id    int64
+		index int
+		want  string
+	}{
+		{c, 0, "Inbox,C,A,B"},
+		{c, 99, "Inbox,A,B,C"}, // clamped to the end
+		{a, 1, "Inbox,B,A,C"},
+		{a, -5, "Inbox,A,B,C"}, // clamped to the top
+	}
+	for _, st := range steps {
+		if err := s.MoveProject(st.id, st.index); err != nil {
+			t.Fatal(err)
+		}
+		if got := names(t, s); got != st.want {
+			t.Fatalf("move %d to %d: got %s, want %s", st.id, st.index, got, st.want)
+		}
+	}
+
+	// A new project goes to the end.
+	s.CreateProject("D")
+	if got := names(t, s); got != "Inbox,A,B,C,D" {
+		t.Fatalf("new project: %s", got)
+	}
+
+	// The inbox stays where it is.
+	inbox, _ := s.InboxID()
+	if err := s.MoveProject(inbox, 2); !errors.Is(err, ErrNotMovable) {
+		t.Fatalf("moving the inbox: %v", err)
+	}
+
+	// Only the rows whose position changed go up with the next sync.
+	if _, err := s.db.Exec(`UPDATE projects SET dirty = 0`); err != nil {
+		t.Fatal(err)
+	}
+	before := s.Changes()
+	if err := s.MoveProject(c, 3); err != nil { // swap C and D
+		t.Fatal(err)
+	}
+	req, _ := s.Pending()
+	if len(req.Projects) != 2 || s.Changes() == before {
+		t.Fatalf("pending after swapping two: %+v", req.Projects)
+	}
+	before = s.Changes()
+	if err := s.MoveProject(c, 3); err != nil { // already there
+		t.Fatal(err)
+	}
+	if s.Changes() != before {
+		t.Fatal("a no-op move counted as a change")
 	}
 }
 

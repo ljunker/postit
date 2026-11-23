@@ -31,7 +31,7 @@
     <div class="brand">Post-its</div>
     <ul class="projects">
       {{range .Projects}}
-      <li><a href="/p/{{.ID}}"{{if eq .ID $.Current.ID}} aria-current="page"{{end}}>
+      <li{{if not .IsInbox}} draggable="true" data-move="/p/{{.ID}}/move" title="Zum Umsortieren ziehen"{{end}}><a href="/p/{{.ID}}" draggable="false"{{if eq .ID $.Current.ID}} aria-current="page"{{end}}>
         <span class="pname">{{if .IsInbox}}📥 {{end}}{{.Name}}</span><span class="count">{{.NoteCount}}</span></a></li>
       {{end}}
     </ul>
@@ -60,6 +60,18 @@
             <input name="name" value="{{.Current.Name}}" required maxlength="200" aria-label="Neuer Name">
             <button>Umbenennen</button>
           </form>
+          {{if or .CanUp .CanDown}}
+          <div class="order">
+            <form method="post" action="/p/{{.Current.ID}}/move">
+              <input type="hidden" name="dir" value="up">
+              <button{{if not .CanUp}} disabled{{end}}>↑ Nach oben</button>
+            </form>
+            <form method="post" action="/p/{{.Current.ID}}/move">
+              <input type="hidden" name="dir" value="down">
+              <button{{if not .CanDown}} disabled{{end}}>↓ Nach unten</button>
+            </form>
+          </div>
+          {{end}}
           <form method="post" action="/p/{{.Current.ID}}/delete"
                 data-confirm="Projekt „{{.Current.Name}}“ mit allen Post-its löschen?">
             <button class="danger">Projekt löschen</button>

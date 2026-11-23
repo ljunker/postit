@@ -228,6 +228,22 @@ func (m Model) updateProjects(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.projSel = len(m.projects) - 1
 	case "enter", "l", "right", "tab":
 		m.mode = modeBoard
+	case "K", "shift+up", "J", "shift+down":
+		p, ok := m.currentProject()
+		if !ok || p.IsInbox {
+			m.msg = "Die Inbox bleibt oben."
+			break
+		}
+		dir := 1
+		if s := k.String(); s == "K" || s == "shift+up" {
+			dir = -1
+		}
+		// The inbox is always first, so the selection minus one is the
+		// project's index among the movable ones.
+		if !m.fail(m.st.MoveProject(p.ID, m.projSel-1+dir)) {
+			m.reloadProjects() // keeps p selected at its new place
+		}
+		return m, nil
 	case "n":
 		return m.startInput("Neues Projekt", "", func(m *Model, name string) error {
 			id, err := m.st.CreateProject(name)
@@ -647,6 +663,7 @@ var fullHelp = [][2]string{
 	{"p", "anpinnen"},
 	{"+ - 0-3", "Priorität"},
 	{"m", "Post-it in anderes Projekt verschieben"},
+	{"K / J", "Projekt nach oben / unten schieben"},
 	{"r / d", "Projekt umbenennen / löschen bzw. Post-it löschen"},
 	{"? / q", "Hilfe / beenden"},
 }
@@ -685,7 +702,7 @@ func (m Model) viewFooter() string {
 		if m.showHelp {
 			return m.viewFullHelp()
 		}
-		s = helpLine("n", "neu", "r", "umbenennen", "d", "löschen", "enter", "öffnen", "?", "hilfe", "q", "beenden")
+		s = helpLine("n", "neu", "r", "umbenennen", "d", "löschen", "K/J", "schieben", "enter", "öffnen", "?", "hilfe", "q", "beenden")
 	case modeBoard:
 		if m.showHelp {
 			return m.viewFullHelp()
