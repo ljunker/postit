@@ -32,6 +32,8 @@ type Project struct {
 	Name      string
 	IsInbox   bool
 	NoteCount int
+	ParentID  int64 // 0 = top level (also when the stored parent is gone)
+	Depth     int   // 0 = top level
 }
 
 type Note struct {
@@ -108,6 +110,13 @@ CREATE INDEX projects_dirty ON projects(dirty) WHERE dirty = 1;
 CREATE INDEX notes_dirty    ON notes(dirty)    WHERE dirty = 1;
 `
 
+// migrateV2 lets projects nest: parent_uid is the parent's uid, ” = top level.
+// position then orders siblings.
+const migrateV2 = `
+ALTER TABLE projects ADD COLUMN parent_uid TEXT NOT NULL DEFAULT '';
+PRAGMA user_version = 2;
+`
+
 // touch marks a row as changed. The clock never goes backwards for a row, so a
 // later local change always wins over an earlier one even if the clock jumps.
 const touch = `modified_at = MAX(?, modified_at + 1), dirty = 1`
@@ -152,9 +161,26 @@ func (s *Store) migrate() error {
 	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return err
 	}
-	if version >= 1 {
-		return nil
+	if version < 1 {
+		if err := s.migrateToV1(); err != nil {
+			return err
+		}
 	}
+	if version < 2 {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if _, err := tx.Exec(migrateV2); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
+	return nil
+}
+
+func (s *Store) migrateToV1() error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -241,12 +267,25 @@ func (s *Store) InboxID() (int64, error) {
 	return res.LastInsertId()
 }
 
-// ListProjects returns the inbox first, then projects in their order (see
-// MoveProject; new projects go to the end). Ties, e.g. after two devices
-// reordered at once, break by creation time so every device agrees.
+// querier is *sql.DB or *sql.Tx.
+type querier interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+}
+
+// ListProjects returns the inbox first, then the project tree depth-first:
+// every project is followed by its subprojects (Depth one higher). Siblings
+// keep their order (see MoveProject; new projects go to the end). Ties, e.g.
+// after two devices reordered at once, break by creation time so every device
+// agrees. A project whose parent is gone, or that ended up in a cycle because
+// two devices nested projects into each other at once, is shown at the top
+// level; nothing is written to repair it.
 func (s *Store) ListProjects() ([]Project, error) {
-	rows, err := s.db.Query(`
-		SELECT p.id, p.name, p.is_inbox, COUNT(n.id)
+	return listProjects(s.db)
+}
+
+func listProjects(q querier) ([]Project, error) {
+	rows, err := q.Query(`
+		SELECT p.id, p.name, p.is_inbox, COUNT(n.id), p.uid, p.parent_uid
 		FROM projects p LEFT JOIN notes n ON n.project_id = p.id AND n.deleted = 0
 		WHERE p.deleted = 0
 		GROUP BY p.id
@@ -255,15 +294,119 @@ func (s *Store) ListProjects() ([]Project, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Project
+	type node struct {
+		p         Project
+		uid, puid string
+	}
+	var all []node
 	for rows.Next() {
-		var p Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.IsInbox, &p.NoteCount); err != nil {
+		var n node
+		if err := rows.Scan(&n.p.ID, &n.p.Name, &n.p.IsInbox, &n.p.NoteCount, &n.uid, &n.puid); err != nil {
 			return nil, err
 		}
-		out = append(out, p)
+		all = append(all, n)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	byUID := make(map[string]int, len(all))
+	for i, n := range all {
+		byUID[n.uid] = i
+	}
+	children := make(map[int][]int) // parent index -> child indexes, in order
+	var roots []int
+	for i, n := range all {
+		pi, ok := byUID[n.puid]
+		if ok && n.puid != "" && !n.p.IsInbox && !all[pi].p.IsInbox {
+			children[pi] = append(children[pi], i)
+		} else {
+			roots = append(roots, i)
+		}
+	}
+
+	out := make([]Project, 0, len(all))
+	seen := make([]bool, len(all))
+	var walk func(i, depth int, parent int64)
+	walk = func(i, depth int, parent int64) {
+		seen[i] = true
+		p := all[i].p
+		p.Depth, p.ParentID = depth, parent
+		out = append(out, p)
+		for _, c := range children[i] {
+			if !seen[c] {
+				walk(c, depth+1, p.ID)
+			}
+		}
+	}
+	for _, i := range roots {
+		walk(i, 0, 0)
+	}
+	// Whatever is left sits in a cycle: show it at the top level, in order.
+	for i := range all {
+		if !seen[i] {
+			walk(i, 0, 0)
+		}
+	}
+	return out, nil
+}
+
+// SiblingIndex returns the index of project id among the projects that share
+// its parent (the inbox excluded; -1 if id is the inbox or missing) and how
+// many such siblings there are. projects is a list from ListProjects.
+func SiblingIndex(projects []Project, id int64) (index, n int) {
+	p, ok := find(projects, id)
+	if !ok || p.IsInbox {
+		return -1, 0
+	}
+	index = -1
+	for _, q := range siblings(projects, p.ParentID) {
+		if q == id {
+			index = n
+		}
+		n++
+	}
+	return index, n
+}
+
+// Descendants returns the ids of all projects below id in projects (a list
+// from ListProjects), not including id.
+func Descendants(projects []Project, id int64) map[int64]bool {
+	out := map[int64]bool{}
+	for i, p := range projects {
+		if p.ID != id {
+			continue
+		}
+		for _, q := range projects[i+1:] {
+			if q.Depth <= p.Depth {
+				break
+			}
+			out[q.ID] = true
+		}
+		break
+	}
+	return out
+}
+
+func find(projects []Project, id int64) (Project, bool) {
+	for _, p := range projects {
+		if p.ID == id {
+			return p, true
+		}
+	}
+	return Project{}, false
+}
+
+// siblings returns the ids of the projects under parent (0 = top level, the
+// inbox excluded) in their order.
+func siblings(projects []Project, parent int64) []int64 {
+	var out []int64
+	for _, p := range projects {
+		if !p.IsInbox && p.ParentID == parent {
+			out = append(out, p.ID)
+		}
+	}
+	return out
 }
 
 func (s *Store) CreateProject(name string) (int64, error) {
@@ -273,7 +416,7 @@ func (s *Store) CreateProject(name string) (int64, error) {
 	}
 	t := now()
 	res, err := s.exec(`INSERT INTO projects(uid, name, position, created_at, modified_at)
-		VALUES (?, ?, COALESCE((SELECT MAX(position) FROM projects), 0) + 1, ?, ?)`, newUID(), name, t, t)
+		VALUES (?, ?, COALESCE((SELECT MAX(position) FROM projects WHERE parent_uid = ''), 0) + 1, ?, ?)`, newUID(), name, t, t)
 	if err != nil {
 		return 0, err
 	}
@@ -289,13 +432,17 @@ func (s *Store) RenameProject(id int64, name string) error {
 	return err
 }
 
-// ErrNotMovable is returned by MoveProject for the inbox or an unknown project.
+// ErrNotMovable is returned by MoveProject and SetParent for the inbox or an
+// unknown project.
 var ErrNotMovable = errors.New("project cannot be moved")
 
-// MoveProject puts a project at index among the projects below the inbox
-// (0 = right below it); index is clamped to the list. The inbox stays first.
-// Positions are renumbered 1..n and only rows whose position changes are
-// marked for sync.
+// ErrCycle is returned by SetParent when the new parent is the project
+// itself, one of its subprojects, the inbox or unknown.
+var ErrCycle = errors.New("project cannot go there")
+
+// MoveProject puts a project at index among its siblings (0 = first); index
+// is clamped to the list. The inbox stays first. Sibling positions are
+// renumbered 1..n and only rows whose position changes are marked for sync.
 func (s *Store) MoveProject(id int64, index int) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -303,47 +450,26 @@ func (s *Store) MoveProject(id int64, index int) error {
 	}
 	defer tx.Rollback()
 
-	type row struct{ id, pos int64 }
-	rows, err := tx.Query(`SELECT id, position FROM projects WHERE deleted = 0 AND is_inbox = 0
-		ORDER BY position, created_at, id`)
+	projects, err := listProjects(tx)
 	if err != nil {
 		return err
 	}
-	var list []row
-	from := -1
-	for rows.Next() {
-		var r row
-		if err := rows.Scan(&r.id, &r.pos); err != nil {
-			rows.Close()
-			return err
-		}
-		if r.id == id {
-			from = len(list)
-		}
-		list = append(list, r)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if from < 0 {
+	p, ok := find(projects, id)
+	if !ok || p.IsInbox {
 		return ErrNotMovable
 	}
-	index = max(0, min(index, len(list)-1))
-	r := list[from]
-	list = append(list[:from], list[from+1:]...)
-	list = append(list[:index], append([]row{r}, list[index:]...)...)
+	var list []int64
+	for _, q := range siblings(projects, p.ParentID) {
+		if q != id {
+			list = append(list, q)
+		}
+	}
+	index = max(0, min(index, len(list)))
+	list = append(list[:index], append([]int64{id}, list[index:]...)...)
 
-	t := now()
-	changed := false
-	for i, r := range list {
-		if r.pos == int64(i+1) {
-			continue
-		}
-		if _, err := tx.Exec(`UPDATE projects SET position = ?, `+touch+` WHERE id = ?`, i+1, t, r.id); err != nil {
-			return err
-		}
-		changed = true
+	changed, err := renumber(tx, list)
+	if err != nil {
+		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return err
@@ -354,20 +480,117 @@ func (s *Store) MoveProject(id int64, index int) error {
 	return nil
 }
 
-// DeleteProject deletes a project and all its notes. The inbox cannot be deleted.
+// renumber sets positions 1..n for ids in order and marks only rows whose
+// position changes. It reports whether any row changed.
+func renumber(tx *sql.Tx, ids []int64) (bool, error) {
+	t := now()
+	changed := false
+	for i, id := range ids {
+		res, err := tx.Exec(`UPDATE projects SET position = ?, `+touch+` WHERE id = ? AND position != ?`, i+1, t, id, i+1)
+		if err != nil {
+			return false, err
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			changed = true
+		}
+	}
+	return changed, nil
+}
+
+// SetParent makes a project a subproject of parentID (0 = top level) and puts
+// it last among its new siblings.
+func (s *Store) SetParent(id, parentID int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	projects, err := listProjects(tx)
+	if err != nil {
+		return err
+	}
+	p, ok := find(projects, id)
+	if !ok || p.IsInbox {
+		return ErrNotMovable
+	}
+	if p.ParentID == parentID {
+		return nil
+	}
+	parentUID := ""
+	if parentID != 0 {
+		parent, ok := find(projects, parentID)
+		if !ok || parent.IsInbox || parentID == id || Descendants(projects, id)[parentID] {
+			return ErrCycle
+		}
+		if err := tx.QueryRow(`SELECT uid FROM projects WHERE id = ?`, parentID).Scan(&parentUID); err != nil {
+			return err
+		}
+	}
+	last := len(siblings(projects, parentID)) + 1
+	if _, err := tx.Exec(`UPDATE projects SET parent_uid = ?, position = ?, `+touch+` WHERE id = ?`,
+		parentUID, last, now(), id); err != nil {
+		return err
+	}
+	// Close the gap left behind.
+	var rest []int64
+	for _, q := range siblings(projects, p.ParentID) {
+		if q != id {
+			rest = append(rest, q)
+		}
+	}
+	if _, err := renumber(tx, rest); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.changes.Add(1)
+	return nil
+}
+
+// DeleteProject deletes a project and its own notes. Its subprojects move one
+// level up, after the deleted project's siblings, keeping their order. The
+// inbox cannot be deleted.
 func (s *Store) DeleteProject(id int64) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	t := now()
-	res, err := tx.Exec(`UPDATE projects SET deleted = 1, `+touch+` WHERE id = ? AND is_inbox = 0 AND deleted = 0`, t, id)
+
+	projects, err := listProjects(tx)
 	if err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	p, ok := find(projects, id)
+	if !ok || p.IsInbox {
 		return nil
+	}
+	newParent := ""
+	if p.ParentID != 0 {
+		if err := tx.QueryRow(`SELECT uid FROM projects WHERE id = ?`, p.ParentID).Scan(&newParent); err != nil {
+			return err
+		}
+	}
+	t := now()
+	var order []int64 // the remaining siblings, then the children
+	for _, q := range siblings(projects, p.ParentID) {
+		if q != id {
+			order = append(order, q)
+		}
+	}
+	for _, c := range siblings(projects, id) {
+		if _, err := tx.Exec(`UPDATE projects SET parent_uid = ?, `+touch+` WHERE id = ?`, newParent, t, c); err != nil {
+			return err
+		}
+		order = append(order, c)
+	}
+	if _, err := renumber(tx, order); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE projects SET deleted = 1, `+touch+` WHERE id = ?`, t, id); err != nil {
+		return err
 	}
 	if _, err := tx.Exec(`UPDATE notes SET deleted = 1, `+touch+` WHERE project_id = ? AND deleted = 0`, t, id); err != nil {
 		return err

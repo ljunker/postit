@@ -24,6 +24,7 @@ const InboxUID = "inbox"
 type Project struct {
 	UID        string `json:"uid"`
 	Name       string `json:"name"`
+	ParentUID  string `json:"parent_uid"` // "" = top level; position orders siblings
 	Position   int64  `json:"position"`
 	IsInbox    bool   `json:"is_inbox"`
 	Deleted    bool   `json:"deleted"`

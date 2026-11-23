@@ -93,7 +93,10 @@
   // ---- drag projects in the sidebar to reorder them ---------------------------
   let dragged = null;
   let draggedFrom = -1;
-  const movable = (li) => [...li.parentNode.querySelectorAll("li[data-move]")];
+  // Only siblings (same parent project) swap places; the server counts the
+  // index among them.
+  const movable = (li) =>
+    [...li.parentNode.querySelectorAll("li[data-move]")].filter((x) => x.dataset.parent === li.dataset.parent);
 
   app.addEventListener("dragstart", (e) => {
     const li = e.target.closest && e.target.closest(".projects li[data-move]");
@@ -108,11 +111,25 @@
   app.addEventListener("dragover", (e) => {
     if (!dragged) return;
     const li = e.target.closest(".projects li[data-move]");
-    if (!li) return;
+    if (!li || li.dataset.parent !== dragged.dataset.parent) return;
     e.preventDefault();
     if (li === dragged) return;
     const r = li.getBoundingClientRect();
-    li.parentNode.insertBefore(dragged, e.clientY > r.top + r.height / 2 ? li.nextSibling : li);
+    // Below a sibling means after its whole subtree; above it means right before it.
+    let before = li;
+    if (e.clientY > r.top + r.height / 2) {
+      const sibs = movable(li);
+      const next = sibs[sibs.indexOf(li) + 1];
+      before = next === dragged ? dragged.nextSibling : next || null;
+      if (!next) {
+        // last sibling: skip its subtree (deeper items that follow it)
+        const depth = (el) => Number(el.style.getPropertyValue("--depth") || 0);
+        let n = li.nextElementSibling;
+        while (n && depth(n) > depth(li)) n = n.nextElementSibling;
+        before = n;
+      }
+    }
+    if (before !== dragged) li.parentNode.insertBefore(dragged, before);
   });
 
   app.addEventListener("drop", (e) => { if (dragged) e.preventDefault(); });

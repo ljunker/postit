@@ -62,6 +62,8 @@ var funcs = template.FuncMap{
 		return out
 	},
 	"repeat": strings.Repeat,
+	// indent puts a project name at its depth in a <select>.
+	"indent": func(p store.Project) string { return strings.Repeat("   ", p.Depth) + p.Name },
 }
 
 // Handler returns the app's routes.
@@ -81,6 +83,7 @@ func (a *App) Handler() http.Handler {
 	app.HandleFunc("POST /p/{id}/rename", a.renameProject)
 	app.HandleFunc("POST /p/{id}/delete", a.deleteProject)
 	app.HandleFunc("POST /p/{id}/move", a.moveProject)
+	app.HandleFunc("POST /p/{id}/parent", a.setProjectParent)
 	app.HandleFunc("POST /p/{id}/notes", a.createNote)
 	app.HandleFunc("GET /n/{id}", a.notePage)
 	app.HandleFunc("POST /n/{id}", a.saveNote)
@@ -184,6 +187,7 @@ type pageData struct {
 	Sync     syncView
 	CanUp    bool // the current project can move up / down
 	CanDown  bool
+	Parents  []store.Project // where the current project may go (none for the inbox)
 }
 
 func (a *App) projectPage(w http.ResponseWriter, r *http.Request) {
@@ -197,8 +201,9 @@ func (a *App) projectPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := pageData{Projects: projects, Current: cur, Sync: a.syncView()}
-	if i, n := movableIndex(projects, cur.ID); i >= 0 {
+	if i, n := store.SiblingIndex(projects, cur.ID); i >= 0 {
 		data.CanUp, data.CanDown = i > 0, i < n-1
+		data.Parents = parentChoices(projects, cur)
 	}
 	for _, n := range notes {
 		data.Notes = append(data.Notes, newNoteView(n))
@@ -302,7 +307,7 @@ func (a *App) deleteProject(w http.ResponseWriter, r *http.Request) {
 }
 
 // moveProject reorders a project: dir=up|down moves it one step, to=N puts
-// it at index N among the projects below the inbox (drag and drop).
+// it at index N among its siblings (drag and drop).
 func (a *App) moveProject(w http.ResponseWriter, r *http.Request) {
 	projects, p, ok := a.project(w, r)
 	if !ok {
@@ -312,7 +317,7 @@ func (a *App) moveProject(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Die Inbox bleibt oben.", http.StatusBadRequest)
 		return
 	}
-	cur, _ := movableIndex(projects, p.ID)
+	cur, _ := store.SiblingIndex(projects, p.ID)
 	var to int
 	switch dir := r.PostFormValue("dir"); {
 	case dir == "up":
@@ -333,20 +338,42 @@ func (a *App) moveProject(w http.ResponseWriter, r *http.Request) {
 	a.changed(w, r, projectURL(p.ID))
 }
 
-// movableIndex returns the index of project id among the projects below the
-// inbox (-1 if it is the inbox or missing) and how many of those there are.
-func movableIndex(projects []store.Project, id int64) (index, n int) {
-	index = -1
-	for _, p := range projects {
-		if p.IsInbox {
-			continue
-		}
-		if p.ID == id {
-			index = n
-		}
-		n++
+// setProjectParent makes a project a subproject of parent=<id>, or puts it at
+// the top level for parent=0.
+func (a *App) setProjectParent(w http.ResponseWriter, r *http.Request) {
+	_, p, ok := a.project(w, r)
+	if !ok {
+		return
 	}
-	return index, n
+	parent, err := strconv.ParseInt(r.PostFormValue("parent"), 10, 64)
+	if err != nil {
+		http.Error(w, "parent=<Projekt-ID> fehlt", http.StatusBadRequest)
+		return
+	}
+	switch err := a.st.SetParent(p.ID, parent); {
+	case errors.Is(err, store.ErrNotMovable):
+		http.Error(w, "Die Inbox bleibt oben.", http.StatusBadRequest)
+		return
+	case errors.Is(err, store.ErrCycle):
+		http.Error(w, "Ein Projekt kann nicht unter sich selbst, eines seiner Unterprojekte oder die Inbox.", http.StatusBadRequest)
+		return
+	case a.fail(w, err):
+		return
+	}
+	a.changed(w, r, projectURL(p.ID))
+}
+
+// parentChoices are the projects p may go under: not the inbox, not p, not
+// one of its subprojects.
+func parentChoices(projects []store.Project, p store.Project) []store.Project {
+	below := store.Descendants(projects, p.ID)
+	var out []store.Project
+	for _, q := range projects {
+		if !q.IsInbox && q.ID != p.ID && !below[q.ID] {
+			out = append(out, q)
+		}
+	}
+	return out
 }
 
 // ---- notes -----------------------------------------------------------------

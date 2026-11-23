@@ -30,7 +30,7 @@
     </label>
     <label>Projekt
       <select name="project">
-        {{range .Projects}}<option value="{{.ID}}"{{if eq .ID $.Note.ProjectID}} selected{{end}}>{{.Name}}</option>{{end}}
+        {{range .Projects}}<option value="{{.ID}}"{{if eq .ID $.Note.ProjectID}} selected{{end}}>{{indent .}}</option>{{end}}
       </select>
     </label>
     <label class="check"><input type="checkbox" name="pinned" value="1"{{if .Note.Pinned}} checked{{end}}> angeheftet</label>
