@@ -1,42 +1,63 @@
-# postitd deployen (postit.kryptikk.de)
+# postitd und Webapp deployen (postit.kryptikk.de)
 
-`postitd` ist der Sync-Service für `p`. Er läuft als Docker-Container und lauscht auf `127.0.0.1:8080`; TLS und die Domain übernimmt der vorhandene Reverse-Proxy.
+Zwei Container aus `docker-compose.yml`:
+
+| Dienst       | Aufgabe                                        | lauscht auf        |
+|--------------|------------------------------------------------|--------------------|
+| `postitd`    | Sync-Service für `p` (und für die Webapp)      | `127.0.0.1:8983`   |
+| `postit-web` | Webapp im Browser, Login mit Passwort          | `127.0.0.1:8984`   |
+
+TLS und die Domain übernimmt der vorhandene Reverse-Proxy. Die Webapp ist für `postitd` nur ein weiteres Gerät: Sie hat ihre eigene SQLite-Kopie und gleicht sie über das Compose-Netz (`http://postitd:8080`) ab, beim Start, kurz nach jeder Änderung, alle 15 s und vor dem Anzeigen einer Seite. Der Sync-Token bleibt auf dem Server, der Browser bekommt nur ein Session-Cookie.
 
 ## 1. Auf dem Server
 
 ```sh
 git clone … postit && cd postit      # oder das Repo anders auf den Server bringen
 cp .env.example .env
-echo "POSTIT_TOKEN=$(openssl rand -hex 32)" > .env
+{ echo "POSTIT_TOKEN=$(openssl rand -hex 32)"; echo "POSTIT_WEB_PASSWORD=<dein Passwort, ≥ 12 Zeichen>"; } > .env
 chmod 600 .env
 docker compose up -d --build
-curl -i http://127.0.0.1:8080/healthz   # → 204 No Content
+curl -i http://127.0.0.1:8983/healthz   # postitd    → 204 No Content
+curl -i http://127.0.0.1:8984/healthz   # postit-web → 204 No Content
 ```
 
-Den Token aus `.env` brauchst du gleich auf jedem Gerät.
+Den Token aus `.env` brauchst du gleich auf jedem Gerät, das Passwort im Browser.
 
 ## 2. Reverse-Proxy
 
-`postit.kryptikk.de` per HTTPS auf `http://127.0.0.1:8080` weiterleiten. Beispiele:
+Eine Domain für beides: `/api/*` geht an `postitd`, alles andere an die Webapp. So bleibt `p -login https://postit.kryptikk.de` gültig.
 
 Caddy:
 ```
 postit.kryptikk.de {
-	reverse_proxy 127.0.0.1:8080
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8983
+	}
+	handle {
+		reverse_proxy 127.0.0.1:8984
+	}
 }
 ```
 
 nginx (im `server`-Block mit TLS):
 ```
-location / {
-	proxy_pass http://127.0.0.1:8080;
+location /api/ {
+	proxy_pass http://127.0.0.1:8983;
 	proxy_set_header Host $host;
 	proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 	client_max_body_size 16m;
 }
+location / {
+	proxy_pass http://127.0.0.1:8984;
+	proxy_set_header Host $host;
+	proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+	proxy_set_header X-Forwarded-Proto $scheme;
+}
 ```
 
-Läuft der Proxy selbst in Docker (z. B. Traefik), statt `ports:` den Container ins Proxy-Netzwerk hängen und den Proxy auf `postitd:8080` zeigen lassen.
+Wichtig für die Webapp: Der Proxy muss den ursprünglichen `Host` weitergeben (Caddy macht das von selbst). Die Webapp lehnt Formular-Posts ab, deren `Origin` nicht zum Host passt (CSRF-Schutz). `X-Forwarded-Proto: https` sorgt dafür, dass das Session-Cookie als `Secure` gesetzt wird.
+
+Läuft der Proxy selbst in Docker (z. B. Traefik), statt `ports:` beide Container ins Proxy-Netzwerk hängen und den Proxy auf `postitd:8080` bzw. `postit-web:8080` zeigen lassen.
 
 ## 3. Auf jedem Gerät
 
@@ -46,19 +67,35 @@ p -login https://postit.kryptikk.de   # fragt den Token ab, gleicht sofort ab
 
 Die Verbindung landet in `~/.config/postit/sync.json` (nur für dich lesbar). Danach synchronisiert `p` von selbst: beim Start, kurz nach jeder Änderung, alle 30 s und beim Beenden. Offline arbeitet `p` normal weiter und holt den Abgleich nach. Manuell: `p -sync`.
 
+Im Browser: `https://postit.kryptikk.de` öffnen und mit `POSTIT_WEB_PASSWORD` anmelden. Die Sitzung hält 30 Tage.
+
+## Images bauen
+
+Beide Images entstehen aus demselben `Dockerfile`:
+
+```sh
+docker build -t kryptikker/postitd:latest .                  # Standard (letzte Stage)
+docker build --target web -t kryptikker/postit-web:latest .
+docker push kryptikker/postitd:latest && docker push kryptikker/postit-web:latest
+```
+
+Auf dem Server reicht dann `docker compose pull && docker compose up -d`. Ohne Registry baut `docker compose up -d --build` die Webapp direkt aus dem Repo.
+
 ## Betrieb
 
-- **Update:** `git pull && docker compose up -d --build`
-- **Logs:** `docker compose logs -f postitd`
-- **Backup:** die SQLite-Datei im Volume sichern, am sichersten bei gestopptem Dienst:
+- **Update:** `git pull && docker compose up -d --build` (oder `docker compose pull && docker compose up -d`)
+- **Logs:** `docker compose logs -f postitd postit-web`
+- **Backup:** Nur die SQLite-Datei von `postitd` ist wichtig. Am sichersten sicherst du sie bei gestopptem Dienst:
   ```sh
   docker compose stop
   docker run --rm -v postit_postit-data:/data -v "$PWD":/backup alpine cp /data/postit.db /backup/postit-$(date +%F).db
   docker compose start
   ```
-  (Der Volume-Name hängt vom Verzeichnisnamen ab: `docker volume ls`.)
-- **Token wechseln:** neuen Token in `.env`, `docker compose up -d`, auf jedem Gerät erneut `p -login …`.
+  (Der Volume-Name hängt vom Verzeichnisnamen ab: `docker volume ls`.) Das Volume `postit-web-data` ist nur eine Kopie und braucht kein Backup. Löschst du es, holt sich die Webapp beim nächsten Start alles neu von `postitd`. Noch nicht abgeglichene Änderungen aus dem Browser gingen dabei verloren, deshalb vorher `docker compose stop postit-web`: Der Dienst synchronisiert beim Beenden ein letztes Mal.
+- **Token wechseln:** neuen Token in `.env`, `docker compose up -d`, auf jedem Gerät erneut `p -login …`. Die Webapp übernimmt ihn automatisch, alle Browser-Sitzungen enden.
+- **Web-Passwort wechseln:** `POSTIT_WEB_PASSWORD` in `.env` ändern, `docker compose up -d`. Alle Browser-Sitzungen enden.
+- **Fehlversuche:** Nach 5 falschen Passwörtern pro IP und Minute sperrt die Webapp weitere Versuche für den Rest der Minute.
 
 ## Konfliktregel
 
-Jede Zeile (Projekt, Post-it) trägt einen Änderungszeitpunkt. Ändern zwei Geräte dieselbe Zeile, gewinnt die spätere Änderung. Gelöschtes wird als Grabstein gespeichert, damit das Löschen auf allen Geräten ankommt.
+Jede Zeile (Projekt, Post-it) trägt einen Änderungszeitpunkt. Ändern zwei Geräte dieselbe Zeile, gewinnt die spätere Änderung. Das gilt auch für die Webapp. Gelöschtes wird als Grabstein gespeichert, damit das Löschen auf allen Geräten ankommt.
