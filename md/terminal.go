@@ -17,6 +17,7 @@ import (
 func Terminal(src string, width int, base lipgloss.Style) string {
 	width = max(4, width)
 	r := term{src: []byte(src), base: base, code: base.Background(shade(base.GetBackground()))}
+	r.strong = base.Foreground(strong(base.GetBackground(), base.GetForeground()))
 	lines := r.blocks(Parse(r.src), width)
 	for i, l := range lines {
 		lines[i] = r.pad(l, width)
@@ -42,10 +43,40 @@ func shade(c lipgloss.TerminalColor) lipgloss.TerminalColor {
 	return lipgloss.Color(cc.BlendRgb(toward, 0.12).Clamped().Hex())
 }
 
+// strong returns the text color for bold text on bg: a saturated, dark (or,
+// on dark colors, light) tone of bg's hue. Some terminals (herdr, for one)
+// drop the bold attribute, so bold text needs a color of its own to stand
+// out. fg is returned when bg is not a hex color.
+func strong(bg, fg lipgloss.TerminalColor) lipgloss.TerminalColor {
+	col, ok := bg.(lipgloss.Color)
+	if !ok {
+		return fg
+	}
+	cc, err := colorful.Hex(string(col))
+	if err != nil {
+		return fg
+	}
+	h, s, l := cc.Hsl()
+	if s < 0.1 { // gray has no hue of its own
+		h = 210
+	}
+	light := 0.22
+	if l < 0.35 {
+		light = 0.78
+	}
+	return lipgloss.Color(colorful.Hsl(h, 0.85, light).Clamped().Hex())
+}
+
 type term struct {
-	src  []byte
-	base lipgloss.Style
-	code lipgloss.Style
+	src    []byte
+	base   lipgloss.Style
+	code   lipgloss.Style
+	strong lipgloss.Style // base with the color for bold text
+}
+
+// bold makes st bold and gives it the color for bold text.
+func (r term) bold(st lipgloss.Style) lipgloss.Style {
+	return st.Bold(true).Foreground(r.strong.GetForeground())
 }
 
 func (r term) pad(line string, width int) string {
@@ -90,7 +121,7 @@ func (r term) block(n ast.Node, width int) []string {
 	case *ast.Paragraph, *ast.TextBlock:
 		return r.wrap(r.inline(n, r.base), width)
 	case *ast.Heading:
-		st := r.base.Bold(true)
+		st := r.bold(r.base)
 		if n.Level == 1 {
 			st = st.Underline(true)
 		}
@@ -183,7 +214,7 @@ func (r term) table(t *extast.Table, width int) []string {
 	for row := t.FirstChild(); row != nil; row = row.NextSibling() {
 		st := r.base
 		if _, ok := row.(*extast.TableHeader); ok {
-			st = st.Bold(true)
+			st = r.bold(st)
 		}
 		var cells []string
 		for i, cell := 0, row.FirstChild(); cell != nil; i, cell = i+1, cell.NextSibling() {
@@ -269,7 +300,7 @@ func (r term) inlineNode(n ast.Node, st lipgloss.Style) []run {
 		return []run{{string(n.Value), st}}
 	case *ast.Emphasis:
 		if n.Level >= 2 {
-			return r.inline(n, st.Bold(true))
+			return r.inline(n, r.bold(st))
 		}
 		return r.inline(n, st.Italic(true))
 	case *extast.Strikethrough:
