@@ -19,6 +19,7 @@ Eine schnelle TUI, eine schlanke Webapp und ein Sync-Dienst, der alles zusammenh
 - **`p`**: Terminal-UI mit Vim-Tasten. Projekte links, Post-its als Kacheln rechts.
 - **Markdown** in jedem Post-it: Überschriften, **fett**, *kursiv*, `Code`, Checklisten.
 - **8 Farben, 3 Prioritäten, Pins.** Wichtiges steht oben.
+- **Unterprojekte**: Jedes Projekt lässt sich unter ein anderes schieben, beliebig tief.
 - **Inbox** für alles, was schnell rausmuss: `p Milch kaufen`.
 - **`postit-web`**: dieselben Notizen im Browser, auch auf dem Handy und im Dark Mode.
 - **`postitd`**: Sync-Dienst. Jedes Gerät hat eine eigene Kopie und arbeitet offline weiter.
@@ -41,10 +42,12 @@ Die Daten liegen in `~/.local/share/postit/postit.db` (oder `$POSTIT_DB`, `-db <
 | `h j k l` | bewegen | `n` | neues Projekt |
 | `n` | neues Post-it | `r` | umbenennen |
 | `enter` / `e` | ansehen / bearbeiten | `K` / `J` | nach oben / unten schieben |
-| `c` / `C` | Farbe vor / zurück | `d` | löschen |
-| `p` | anpinnen | `tab` | zum Board |
-| `+` `-` `0`–`3` | Priorität | `?` | alle Tasten |
-| `m` | in anderes Projekt | `q` | beenden |
+| `c` / `C` | Farbe vor / zurück | `m` | unter anderes Projekt schieben |
+| `p` | anpinnen | `d` | löschen |
+| `+` `-` `0`–`3` | Priorität | `tab` | zum Board |
+| `m` | in anderes Projekt | `?` / `q` | alle Tasten / beenden |
+
+`K`/`J` sortiert ein Projekt unter seinen Geschwistern. Wird ein Projekt gelöscht, rücken seine Unterprojekte eine Ebene hoch. Im Browser steht „Unterordnen“ im ⋯-Menü des Projekts.
 
 Im Editor: `esc` speichert, `ctrl+n`/`ctrl+b` wechselt die Farbe, `ctrl+p` pinnt, `alt+↑/↓` ändert die Priorität.
 

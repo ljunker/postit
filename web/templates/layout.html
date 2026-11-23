@@ -31,7 +31,7 @@
     <div class="brand">Post-its</div>
     <ul class="projects">
       {{range .Projects}}
-      <li{{if not .IsInbox}} draggable="true" data-move="/p/{{.ID}}/move" title="Zum Umsortieren ziehen"{{end}}><a href="/p/{{.ID}}" draggable="false"{{if eq .ID $.Current.ID}} aria-current="page"{{end}}>
+      <li{{if .Depth}} style="--depth:{{.Depth}}"{{end}}{{if not .IsInbox}} draggable="true" data-move="/p/{{.ID}}/move" data-parent="{{.ParentID}}" title="Zum Umsortieren ziehen"{{end}}><a href="/p/{{.ID}}" draggable="false"{{if eq .ID $.Current.ID}} aria-current="page"{{end}}>
         <span class="pname">{{if .IsInbox}}📥 {{end}}{{.Name}}</span><span class="count">{{.NoteCount}}</span></a></li>
       {{end}}
     </ul>
@@ -59,6 +59,13 @@
           <form method="post" action="/p/{{.Current.ID}}/rename">
             <input name="name" value="{{.Current.Name}}" required maxlength="200" aria-label="Neuer Name">
             <button>Umbenennen</button>
+          </form>
+          <form method="post" action="/p/{{.Current.ID}}/parent" class="parent">
+            <select name="parent" aria-label="Unterprojekt von">
+              <option value="0"{{if not .Current.ParentID}} selected{{end}}>— oberste Ebene —</option>
+              {{range .Parents}}<option value="{{.ID}}"{{if eq .ID $.Current.ParentID}} selected{{end}}>{{indent .}}</option>{{end}}
+            </select>
+            <button>Unterordnen</button>
           </form>
           {{if or .CanUp .CanDown}}
           <div class="order">

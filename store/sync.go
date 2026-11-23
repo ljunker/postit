@@ -17,14 +17,14 @@ func (s *Store) Pending() (syncapi.Request, error) {
 	}
 
 	rows, err := s.db.Query(`
-		SELECT uid, name, position, is_inbox, deleted, created_at, modified_at
+		SELECT uid, name, parent_uid, position, is_inbox, deleted, created_at, modified_at
 		FROM projects WHERE dirty = 1`)
 	if err != nil {
 		return req, err
 	}
 	for rows.Next() {
 		var p syncapi.Project
-		if err := rows.Scan(&p.UID, &p.Name, &p.Position, &p.IsInbox, &p.Deleted, &p.CreatedAt, &p.ModifiedAt); err != nil {
+		if err := rows.Scan(&p.UID, &p.Name, &p.ParentUID, &p.Position, &p.IsInbox, &p.Deleted, &p.CreatedAt, &p.ModifiedAt); err != nil {
 			rows.Close()
 			return req, err
 		}
@@ -122,13 +122,13 @@ func applyProject(tx *sql.Tx, p syncapi.Project) (bool, error) {
 		return false, nil // our newer change goes up next time
 	}
 	if !found {
-		_, err := tx.Exec(`INSERT INTO projects(uid, name, position, is_inbox, deleted, created_at, modified_at, dirty)
-			VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
-			p.UID, p.Name, p.Position, p.IsInbox, p.Deleted, p.CreatedAt, p.ModifiedAt)
+		_, err := tx.Exec(`INSERT INTO projects(uid, name, parent_uid, position, is_inbox, deleted, created_at, modified_at, dirty)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+			p.UID, p.Name, p.ParentUID, p.Position, p.IsInbox, p.Deleted, p.CreatedAt, p.ModifiedAt)
 		return !p.Deleted, err
 	}
-	_, err = tx.Exec(`UPDATE projects SET name = ?, position = ?, is_inbox = ?, deleted = ?, created_at = ?, modified_at = ?, dirty = 0
-		WHERE id = ?`, p.Name, p.Position, p.IsInbox, p.Deleted, p.CreatedAt, p.ModifiedAt, id)
+	_, err = tx.Exec(`UPDATE projects SET name = ?, parent_uid = ?, position = ?, is_inbox = ?, deleted = ?, created_at = ?, modified_at = ?, dirty = 0
+		WHERE id = ?`, p.Name, p.ParentUID, p.Position, p.IsInbox, p.Deleted, p.CreatedAt, p.ModifiedAt, id)
 	return modified != p.ModifiedAt, err
 }
 

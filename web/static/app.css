@@ -86,6 +86,8 @@ input:not([type=checkbox]):not([type=radio]), select, textarea {
 .project-actions .order form { flex: 1; }
 .project-actions .order button { flex: 1; background: transparent; color: inherit; border: 1px solid var(--line); }
 .project-actions .order button:disabled { opacity: .4; cursor: default; }
+.projects li { padding-left: calc(var(--depth, 0) * 1rem); }
+.project-actions .parent select { flex: 1; min-width: 0; }
 .projects li[draggable=true] { cursor: grab; }
 .projects li.dragging { opacity: .4; }
 

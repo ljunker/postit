@@ -25,6 +25,7 @@ const schema = `
 CREATE TABLE IF NOT EXISTS projects (
 	uid         TEXT PRIMARY KEY,
 	name        TEXT    NOT NULL,
+	parent_uid  TEXT    NOT NULL DEFAULT '',
 	position    INTEGER NOT NULL,
 	is_inbox    INTEGER NOT NULL,
 	deleted     INTEGER NOT NULL,
@@ -69,7 +70,22 @@ func OpenDB(path string) (*DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("schema: %w", err)
 	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("schema: %w", err)
+	}
 	return &DB{db: db}, nil
+}
+
+// migrate adds columns that databases created by older versions lack.
+func migrate(db *sql.DB) error {
+	var n int
+	err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name = 'parent_uid'`).Scan(&n)
+	if err != nil || n > 0 {
+		return err
+	}
+	_, err = db.Exec(`ALTER TABLE projects ADD COLUMN parent_uid TEXT NOT NULL DEFAULT ''`)
+	return err
 }
 
 func (d *DB) Close() error { return d.db.Close() }
@@ -103,9 +119,9 @@ func (d *DB) Sync(req syncapi.Request) (syncapi.Response, error) {
 			continue
 		}
 		rev++
-		if _, err := tx.Exec(`INSERT OR REPLACE INTO projects(uid, name, position, is_inbox, deleted, created_at, modified_at, rev)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			p.UID, p.Name, p.Position, p.IsInbox, p.Deleted, p.CreatedAt, p.ModifiedAt, rev); err != nil {
+		if _, err := tx.Exec(`INSERT OR REPLACE INTO projects(uid, name, parent_uid, position, is_inbox, deleted, created_at, modified_at, rev)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			p.UID, p.Name, p.ParentUID, p.Position, p.IsInbox, p.Deleted, p.CreatedAt, p.ModifiedAt, rev); err != nil {
 			return resp, err
 		}
 	}
@@ -162,7 +178,7 @@ func changedSince(tx *sql.Tx, cols, table string, since int64, extra []string) (
 }
 
 func queryProjects(tx *sql.Tx, since int64, extra []string) ([]syncapi.Project, error) {
-	rows, err := changedSince(tx, `uid, name, position, is_inbox, deleted, created_at, modified_at`, "projects", since, extra)
+	rows, err := changedSince(tx, `uid, name, parent_uid, position, is_inbox, deleted, created_at, modified_at`, "projects", since, extra)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +186,7 @@ func queryProjects(tx *sql.Tx, since int64, extra []string) ([]syncapi.Project, 
 	out := []syncapi.Project{}
 	for rows.Next() {
 		var p syncapi.Project
-		if err := rows.Scan(&p.UID, &p.Name, &p.Position, &p.IsInbox, &p.Deleted, &p.CreatedAt, &p.ModifiedAt); err != nil {
+		if err := rows.Scan(&p.UID, &p.Name, &p.ParentUID, &p.Position, &p.IsInbox, &p.Deleted, &p.CreatedAt, &p.ModifiedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, p)

@@ -58,7 +58,8 @@ type Model struct {
 	confirmText   string
 	confirmAction func(*Model) error
 
-	moveSel int
+	moveSel  int
+	moveProj bool // modeMove picks a parent for the current project, not a project for the note
 
 	sync syncState
 }
@@ -238,9 +239,8 @@ func (m Model) updateProjects(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if s := k.String(); s == "K" || s == "shift+up" {
 			dir = -1
 		}
-		// The inbox is always first, so the selection minus one is the
-		// project's index among the movable ones.
-		if !m.fail(m.st.MoveProject(p.ID, m.projSel-1+dir)) {
+		i, _ := store.SiblingIndex(m.projects, p.ID)
+		if !m.fail(m.st.MoveProject(p.ID, i+dir)) {
 			m.reloadProjects() // keeps p selected at its new place
 		}
 		return m, nil
@@ -266,6 +266,21 @@ func (m Model) updateProjects(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.reloadProjects()
 			return err
 		})
+	case "m":
+		p, ok := m.currentProject()
+		if !ok || p.IsInbox {
+			m.msg = "Die Inbox bleibt oben."
+			break
+		}
+		m.prevMode, m.mode = m.mode, modeMove
+		m.moveSel, m.moveProj = 0, true
+		// Start on the current parent so enter alone changes nothing.
+		for i, t := range m.moveTargets() {
+			if t.ID == p.ParentID {
+				m.moveSel = i
+			}
+		}
+		return m, nil
 	case "d", "x":
 		p, ok := m.currentProject()
 		if !ok || p.IsInbox {
@@ -273,6 +288,9 @@ func (m Model) updateProjects(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			break
 		}
 		text := fmt.Sprintf("Projekt „%s“ mit %d Post-it(s) löschen?", p.Name, p.NoteCount)
+		if len(store.Descendants(m.projects, p.ID)) > 0 {
+			text += " Unterprojekte rücken eine Ebene hoch."
+		}
 		m.startConfirm(text, func(m *Model) error {
 			err := m.st.DeleteProject(p.ID)
 			m.reloadProjects()
@@ -366,7 +384,7 @@ func (m Model) updateBoard(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "m":
 		if hasNote && len(m.projects) > 1 {
 			m.prevMode, m.mode = m.mode, modeMove
-			m.moveSel = 0
+			m.moveSel, m.moveProj = 0, false
 		} else if hasNote {
 			m.msg = "Kein anderes Projekt vorhanden – mit n im Projekt-Bereich anlegen."
 		}
@@ -524,16 +542,33 @@ func (m Model) updateConfirm(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// moveTargets are all projects except the one the note is in.
+// moveTargets are, when moving a note, all projects except the one it is in;
+// when moving a project, the top level (ID 0) and every project it may go
+// under: not the inbox, not itself, not one of its subprojects.
 func (m *Model) moveTargets() []store.Project {
 	p, _ := m.currentProject()
 	var out []store.Project
+	if !m.moveProj {
+		for _, q := range m.projects {
+			if q.ID != p.ID {
+				out = append(out, q)
+			}
+		}
+		return out
+	}
+	out = append(out, store.Project{Name: "(oberste Ebene)"})
+	below := store.Descendants(m.projects, p.ID)
 	for _, q := range m.projects {
-		if q.ID != p.ID {
+		if !q.IsInbox && q.ID != p.ID && !below[q.ID] {
 			out = append(out, q)
 		}
 	}
 	return out
+}
+
+// indent puts a project name at its depth in the tree.
+func indent(p store.Project) string {
+	return strings.Repeat("  ", p.Depth) + p.Name
 }
 
 func (m Model) updateMove(k tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -547,8 +582,24 @@ func (m Model) updateMove(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveSel = max(m.moveSel-1, 0)
 	case "enter":
 		m.mode = m.prevMode
+		if m.moveSel >= len(targets) {
+			break
+		}
+		if m.moveProj {
+			p, ok := m.currentProject()
+			t := targets[m.moveSel]
+			if ok && !m.fail(m.st.SetParent(p.ID, t.ID)) {
+				if t.ID == 0 {
+					m.msg = "Auf die oberste Ebene verschoben."
+				} else {
+					m.msg = fmt.Sprintf("Unter „%s“ verschoben.", t.Name)
+				}
+			}
+			m.reloadProjects()
+			break
+		}
 		n, ok := m.currentNote()
-		if ok && m.moveSel < len(targets) {
+		if ok {
 			t := targets[m.moveSel]
 			if !m.fail(m.st.MoveNote(n.ID, t.ID)) {
 				m.msg = fmt.Sprintf("Verschoben nach „%s“.", t.Name)
@@ -602,7 +653,7 @@ func (m *Model) viewProjects(h int) string {
 	for i := m.projOff; i < min(len(m.projects), m.projOff+listH); i++ {
 		p := m.projects[i]
 		count := fmt.Sprint(p.NoteCount)
-		name := ansi.Truncate(p.Name, innerW-len(count)-3, "…")
+		name := ansi.Truncate(indent(p), innerW-len(count)-3, "…")
 		pad := innerW - 2 - lipgloss.Width(name) - len(count)
 		line := name + strings.Repeat(" ", max(1, pad)) + count
 		switch {
@@ -641,13 +692,21 @@ func (m *Model) viewBoard(h int) string {
 }
 
 func (m Model) viewMove(w, h int) string {
-	n, _ := m.currentNote()
-	lines := []string{headerStyle.Render("Verschieben nach …"), mutedStyle.Render(ansi.Truncate(md.Title(n.Body), 30, "…")), ""}
+	head, what := "Verschieben nach …", ""
+	if m.moveProj {
+		p, _ := m.currentProject()
+		head, what = "Unterprojekt von …", p.Name
+	} else {
+		n, _ := m.currentNote()
+		what = md.Title(n.Body)
+	}
+	lines := []string{headerStyle.Render(head), mutedStyle.Render(ansi.Truncate(what, 30, "…")), ""}
 	for i, t := range m.moveTargets() {
+		name := ansi.Truncate(indent(t), max(10, w-12), "…")
 		if i == m.moveSel {
-			lines = append(lines, selectedStyle.Render("› "+t.Name+" "))
+			lines = append(lines, selectedStyle.Render("› "+name+" "))
 		} else {
-			lines = append(lines, "  "+t.Name)
+			lines = append(lines, "  "+name)
 		}
 	}
 	box := activePaneStyle.Padding(1, 3).Render(strings.Join(lines, "\n"))
@@ -664,6 +723,7 @@ var fullHelp = [][2]string{
 	{"+ - 0-3", "Priorität"},
 	{"m", "Post-it in anderes Projekt verschieben"},
 	{"K / J", "Projekt nach oben / unten schieben"},
+	{"m (Projekte)", "Projekt unter ein anderes schieben"},
 	{"r / d", "Projekt umbenennen / löschen bzw. Post-it löschen"},
 	{"? / q", "Hilfe / beenden"},
 }
@@ -702,7 +762,7 @@ func (m Model) viewFooter() string {
 		if m.showHelp {
 			return m.viewFullHelp()
 		}
-		s = helpLine("n", "neu", "r", "umbenennen", "d", "löschen", "K/J", "schieben", "enter", "öffnen", "?", "hilfe", "q", "beenden")
+		s = helpLine("n", "neu", "r", "umbenennen", "d", "löschen", "K/J", "schieben", "m", "unterordnen", "enter", "öffnen", "?", "hilfe", "q", "beenden")
 	case modeBoard:
 		if m.showHelp {
 			return m.viewFullHelp()
