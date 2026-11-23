@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"postit/md"
 	"postit/palette"
 	"postit/store"
 )
@@ -84,6 +85,7 @@ func (a *App) Handler() http.Handler {
 	app.HandleFunc("POST /n/{id}", a.saveNote)
 	app.HandleFunc("POST /n/{id}/pin", a.pinNote)
 	app.HandleFunc("POST /n/{id}/delete", a.deleteNote)
+	app.HandleFunc("POST /preview", a.preview)
 	mux.Handle("/", a.requireLogin(app))
 
 	return securityHeaders(logRequests(a.log, mux))
@@ -163,8 +165,8 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 type noteView struct {
 	store.Note
 	Color   palette.Color
-	Title   string
-	Rest    string
+	Title   string        // first line as plain text
+	Rest    template.HTML // the rest, Markdown rendered
 	Updated string
 }
 
@@ -203,13 +205,11 @@ func (a *App) projectPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func newNoteView(n store.Note) noteView {
-	body := strings.TrimLeft(n.Body, "\n")
-	_, rest, _ := strings.Cut(body, "\n")
 	return noteView{
 		Note:    n,
 		Color:   palette.ByName(n.Color),
-		Title:   store.Title(n.Body),
-		Rest:    strings.Trim(rest, "\n"),
+		Title:   md.Title(n.Body),
+		Rest:    md.HTML(md.Rest(n.Body)),
 		Updated: n.UpdatedAt.Local().Format("02.01.06 15:04"),
 	}
 }
@@ -368,6 +368,12 @@ func (a *App) deleteNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.changed(w, r, projectURL(n.ProjectID))
+}
+
+// preview renders the editor's text as it will look on the card.
+func (a *App) preview(w http.ResponseWriter, r *http.Request) {
+	body := cleanBody(r.PostFormValue("body"))
+	a.render(w, http.StatusOK, "preview", noteView{Title: md.Title(body), Rest: md.HTML(md.Rest(body))})
 }
 
 // cleanBody normalises line endings and drops trailing blanks, like p.

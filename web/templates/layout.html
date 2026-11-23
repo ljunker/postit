@@ -78,11 +78,11 @@
     <div class="notes">
       {{range .Notes}}
       <article class="note{{if .Pinned}} pinned{{end}}" style="--bg:{{.Color.BG}};--fg:{{.Color.FG}}">
-        <a class="note-open" href="/n/{{.ID}}">
+        <div class="note-body">
           {{if .Priority}}<span class="prio" title="Priorität {{.Priority}}">{{repeat "!" .Priority}}</span>{{end}}
-          <h3>{{if .Title}}{{.Title}}{{else}}<em>(leer)</em>{{end}}</h3>
-          {{if .Rest}}<p>{{.Rest}}</p>{{end}}
-        </a>
+          <h3><a class="note-open" href="/n/{{.ID}}">{{if .Title}}{{.Title}}{{else}}<em>(leer)</em>{{end}}</a></h3>
+          {{if .Rest}}<div class="md">{{.Rest}}</div>{{end}}
+        </div>
         <footer>
           <time>{{.Updated}}</time>
           <form method="post" action="/n/{{.ID}}/pin">

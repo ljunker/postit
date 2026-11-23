@@ -18,6 +18,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/term"
 
+	"postit/md"
 	"postit/store"
 	"postit/syncclient"
 	"postit/ui"
@@ -108,7 +109,7 @@ func quickAdd(st *store.Store, text string) error {
 	if _, err := st.CreateNote(inbox, body, ""); err != nil {
 		return err
 	}
-	fmt.Printf("➜ %s: %s\n", store.InboxName, store.Title(body))
+	fmt.Printf("➜ %s: %s\n", store.InboxName, md.Title(body))
 	return nil
 }
 

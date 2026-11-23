@@ -6,6 +6,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"postit/md"
 	"postit/store"
 )
 
@@ -36,7 +37,7 @@ func renderTile(n store.Note, selected bool) string {
 	gap := tileTextW - lipgloss.Width(left) - lipgloss.Width(right)
 	header := left + base.Render(strings.Repeat(" ", max(0, gap))) + right
 
-	title := n.Title()
+	title := md.Title(n.Body)
 	if title == "" {
 		title = "(leer)"
 	}

@@ -7,7 +7,12 @@
 
 {{define "editor"}}
 <form class="editor" method="post" action="/n/{{.Note.ID}}" style="--bg:{{.Color.BG}};--fg:{{.Color.FG}}">
+  <div class="tabs" role="tablist" hidden>
+    <button type="button" role="tab" data-tab="edit" aria-selected="true">Bearbeiten</button>
+    <button type="button" role="tab" data-tab="preview" aria-selected="false">Vorschau</button>
+  </div>
   <textarea name="body" rows="12" autofocus aria-label="Text">{{.Note.Body}}</textarea>
+  <div class="preview" hidden aria-live="polite"></div>
   <fieldset class="colors">
     <legend>Farbe</legend>
     {{range .Palette}}
@@ -36,3 +41,6 @@
   </div>
 </form>
 {{end}}
+
+{{define "preview"}}<h3>{{if .Title}}{{.Title}}{{else}}<em>(leer)</em>{{end}}</h3>
+{{if .Rest}}<div class="md">{{.Rest}}</div>{{end}}{{end}}
